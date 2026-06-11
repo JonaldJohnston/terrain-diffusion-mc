@@ -18,37 +18,35 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
 
     @Override
     public double compute(DensityFunction.FunctionContext pos) {
-        int x = pos.blockX();
-        int z = pos.blockZ();
-        int y = pos.blockY();
+        int targetHeight = terrainSurfaceHeight(pos.blockX(), pos.blockZ());
+        if (targetHeight == Integer.MIN_VALUE) {
+            return 1.0;
+        }
+        return pos.blockY() < targetHeight ? 1.0 : -1.0;
+    }
 
+    /**
+     * Terrain surface height for a column, or {@link Integer#MIN_VALUE} if
+     * heightmap data is unavailable.
+     */
+    public static int terrainSurfaceHeight(int x, int z) {
         int tileSize = TerrainDiffusionConfig.tileSize();
         int tileShift = Integer.numberOfTrailingZeros(tileSize);
 
-        int tileX = x >> tileShift;
-        int tileZ = z >> tileShift;
-
-        int blockStartX = tileX << tileShift;
-        int blockStartZ = tileZ << tileShift;
-
-        int blockEndX = blockStartX + tileSize;
-        int blockEndZ = blockStartZ + tileSize;
+        int blockStartX = (x >> tileShift) << tileShift;
+        int blockStartZ = (z >> tileShift) << tileShift;
 
         HeightmapData data = LocalTerrainProvider.getInstance()
-                .fetchHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
+                .fetchHeightmap(blockStartZ, blockStartX, blockStartZ + tileSize, blockStartX + tileSize);
 
         if (data == null || data.heightmap == null) {
-            return 1.0;
+            return Integer.MIN_VALUE;
         }
 
         int localX = Math.max(0, Math.min(data.width - 1, x - blockStartX));
         int localZ = Math.max(0, Math.min(data.height - 1, z - blockStartZ));
 
-        int targetHeight = HeightConverter.convertToMinecraftHeight(
-                data.heightmap[localZ][localX]
-        );
-
-        return y < targetHeight ? 1.0 : -1.0;
+        return HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]);
     }
 
     private static final class FillContext {
