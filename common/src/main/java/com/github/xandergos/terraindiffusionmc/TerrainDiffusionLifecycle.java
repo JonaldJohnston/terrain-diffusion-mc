@@ -7,7 +7,6 @@ import com.github.xandergos.terraindiffusionmc.pipeline.ModelAssetManager;
 import com.github.xandergos.terraindiffusionmc.pipeline.PipelineModels;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionDensityFunction;
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionSurfaceEstimate;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
@@ -34,7 +33,6 @@ public final class TerrainDiffusionLifecycle {
     public static final String MOD_ID = "terrain-diffusion-mc";
     private static final Logger LOG = LoggerFactory.getLogger(TerrainDiffusionLifecycle.class);
     public static final ResourceLocation TERRAIN_DIFFUSION_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "terrain_diffusion");
-    public static final ResourceLocation TERRAIN_SURFACE_ESTIMATE_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "terrain_surface_estimate");
     private static boolean initialized;
 
     private TerrainDiffusionLifecycle() {
@@ -74,7 +72,6 @@ public final class TerrainDiffusionLifecycle {
      */
     public static void registerDensityFunctionCodecs(CodecRegistrar<MapCodec<? extends DensityFunction>> registrar) {
         registrar.register(TERRAIN_DIFFUSION_ID, TerrainDiffusionDensityFunction.CODEC);
-        registrar.register(TERRAIN_SURFACE_ESTIMATE_ID, TerrainDiffusionSurfaceEstimate.CODEC);
     }
 
     @FunctionalInterface
