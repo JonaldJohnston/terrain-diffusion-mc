@@ -51,7 +51,7 @@
     "depth": 0,
     "ridges": 0,
     "initial_density_without_jaggedness": {
-      "type": "terrain-diffusion-mc:terrain_diffusion"
+      "type": "terrain-diffusion-mc:terrain_surface_estimate"
     },
     "final_density": {
       "type": "terrain-diffusion-mc:terrain_diffusion"
