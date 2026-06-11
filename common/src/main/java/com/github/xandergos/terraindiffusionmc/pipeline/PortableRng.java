@@ -28,11 +28,19 @@ public final class PortableRng {
      * Returns { newState (64-bit), output32 (unsigned 32-bit as long) }.
      */
     public static long[] pcg64Next(long state) {
-        state = (state * PCG64_MULT + PCG64_INC) & MASK64;
+        state = state * PCG64_MULT + PCG64_INC;
+        return new long[]{state, output(state)};
+    }
+
+    /**
+     * XSH-RR 64/32 output function: unsigned 32-bit output as long for an already-advanced state.
+     * Allocation-free; callers advance state via {@code state * PCG64_MULT + PCG64_INC}
+     * (Java long arithmetic is mod 2^64, so the Python {@code & MASK64} is implicit).
+     */
+    private static long output(long state) {
         long x = (((state >>> 18) ^ state) >>> 27) & 0xFFFFFFFFL;
         int rot = (int) (state >>> 59);
-        long out32 = ((x >>> rot) | (x << ((32 - rot) & 31))) & 0xFFFFFFFFL;
-        return new long[]{state, out32};
+        return ((x >>> rot) | (x << ((32 - rot) & 31))) & 0xFFFFFFFFL;
     }
 
     /**
@@ -43,12 +51,13 @@ public final class PortableRng {
         long state = seed & MASK64;
         int i = 0;
         while (i < length) {
-            long[] r1 = pcg64Next(state);
-            state = r1[0];
-            long[] r2 = pcg64Next(state);
-            state = r2[0];
-            double v1 = 2.0 * (r1[1] + 1.0) * INV_2P32 - 1.0;
-            double v2 = 2.0 * (r2[1] + 1.0) * INV_2P32 - 1.0;
+            // PCG steps inlined (no long[] per call) — same stream as pcg64Next.
+            state = state * PCG64_MULT + PCG64_INC;
+            long o1 = output(state);
+            state = state * PCG64_MULT + PCG64_INC;
+            long o2 = output(state);
+            double v1 = 2.0 * (o1 + 1.0) * INV_2P32 - 1.0;
+            double v2 = 2.0 * (o2 + 1.0) * INV_2P32 - 1.0;
             double s = v1 * v1 + v2 * v2;
             if (s > 0.0 && s < 1.0) {
                 double f = Math.sqrt(-2.0 * Math.log(s) / s);

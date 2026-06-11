@@ -19,15 +19,13 @@ public final class BiomeClassifier {
     // Fixed-seed noise instances (matching Python's module-level _TEMP_NOISE etc.)
     private static final FastNoiseLite TEMP_NOISE, TEMP_NOISE_FINE;
     private static final FastNoiseLite PRECIP_NOISE;
-    private static final FastNoiseLite SNOW_NOISE, SNOW_NOISE_FINE;
     private static final FastNoiseLite BIOME_NOISE, BIOME_NOISE_WARP;
 
     static {
         TEMP_NOISE = makeFnlPerlin(12345, 1f/500f, 3, 2f, 0.5f);
         TEMP_NOISE_FINE = makeFnlPerlin(54321, 1f/128f, 2, 2f, 0.5f);
         PRECIP_NOISE = makeFnlPerlin(12345, 1f/500f, 5, 2f, 0.5f);
-        SNOW_NOISE = makeFnlPerlin(12345, 1f/500f, 3, 2f, 0.5f);
-        SNOW_NOISE_FINE = makeFnlPerlin(54321, 1f/128f, 2, 2f, 0.5f);
+        //snow noise used the exact same seeds/params as the temp noise, so its samples are reused below
         BIOME_NOISE = makeFnlCell(12345, 1f/1000f);
         BIOME_NOISE_WARP = makeFnlWarp(12345, 1f/100f, 115f, 2, 2.0f, 0.54f);
     }
@@ -120,7 +118,16 @@ public final class BiomeClassifier {
 
 
     // Maps a fully-specified location condition to the biome IDs valid there.
-    private static final HashMap<climate, short[]> BIOME_MAP;
+    // Flattened into a dense array indexed by the climate ordinals so the per-pixel
+    // hot loop doesn't allocate a record + hash it for every lookup.
+    private static final short[][] BIOME_TABLE;
+
+    //6 elevations x 6 temperatures x 3 slopes x 6 coverages x 6 moistures x 2 snow = 7776 slots
+    private static int tableIndex(elevation elev, temperature temp, slope slope,
+                                  treeCoverage trees, moisture moist, boolean snow) {
+        return ((((elev.ordinal() * 6 + temp.ordinal()) * 3 + slope.ordinal()) * 6
+                + trees.ordinal()) * 6 + moist.ordinal()) * 2 + (snow ? 1 : 0);
+    }
 
     /**
      * Registers a biome for all condition combinations described by the condition arrays given.
@@ -331,12 +338,33 @@ public final class BiomeClassifier {
                 new boolean[] {false}
         );
 
+        //temperate only (WARM sparse belongs to savanna), and only the wetter classes so
+        //dry steppe/grassland doesn't all turn into sparse forest
         addBiome(builder, BiomePalette.FOREST_SPARSE,
                 new elevation[] {elevation.MIDLAND, elevation.LOWLAND},
-                new temperature[] {temperature.WARM, temperature.TEMPERATE},
+                new temperature[] {temperature.TEMPERATE},
                 null,
                 new treeCoverage[]{treeCoverage.SPARSE},
+                new moisture[] {moisture.SEMI_DRY, moisture.MOIST, moisture.VERY_MOIST, moisture.SATURATED},
+                new boolean[] {false}
+        );
+
+        //dry temperate sparse land becomes grassland instead of forest_sparse
+        addBiome(builder, BiomePalette.PLAINS,
+                new elevation[] {elevation.MIDLAND, elevation.LOWLAND},
+                new temperature[] {temperature.TEMPERATE},
                 null,
+                new treeCoverage[]{treeCoverage.SPARSE},
+                new moisture[] {moisture.VERY_DRY, moisture.DRY, moisture.SEMI_DRY},
+                new boolean[] {false}
+        );
+
+        addBiome(builder, BiomePalette.MEADOW,
+                new elevation[] {elevation.MIDLAND, elevation.LOWLAND},
+                new temperature[] {temperature.TEMPERATE},
+                null,
+                new treeCoverage[]{treeCoverage.SPARSE},
+                new moisture[] {moisture.VERY_DRY, moisture.DRY, moisture.SEMI_DRY},
                 new boolean[] {false}
         );
 
@@ -378,16 +406,71 @@ public final class BiomeClassifier {
         );
 
 
-        // Convert List<Short> values to short[] for cache-friendly access
-        HashMap<climate, short[]> result = new HashMap<>(builder.size() * 2);
+        //gap fills: reachable combinations that previously had no entry and fell through
+        //to the ocean sentinel in classify(), rendering ocean patches on land.
+        //each call is scoped to exactly the previously-empty keys so existing keys keep
+        //the same biome lists (and the same cell noise picks).
+
+        //snowy barren mountains (growing season < 60 days forces BARREN on cold peaks)
+        addBiome(builder, BiomePalette.SNOWY_SLOPES,
+                new elevation[] {elevation.MOUNTAIN},
+                null,
+                null,
+                new treeCoverage[]{treeCoverage.BARREN},
+                null,
+                new boolean[] {true}
+        );
+
+        //dry snowless mountains with no tree cover
+        addBiome(builder, BiomePalette.WINDSWEPT_HILLS,
+                new elevation[] {elevation.MOUNTAIN},
+                null,
+                null,
+                new treeCoverage[]{treeCoverage.NONE},
+                null,
+                new boolean[] {false}
+        );
+
+        //treed snowless mountains in the warmer bands (taiga only covered cool/cold/frozen)
+        addBiome(builder, BiomePalette.TAIGA_SPARSE,
+                new elevation[] {elevation.MOUNTAIN},
+                new temperature[] {temperature.TEMPERATE, temperature.WARM, temperature.HOT},
+                null,
+                new treeCoverage[]{treeCoverage.SPARSE},
+                null,
+                new boolean[] {false}
+        );
+
+        addBiome(builder, BiomePalette.TAIGA,
+                new elevation[] {elevation.MOUNTAIN},
+                new temperature[] {temperature.TEMPERATE, temperature.WARM, temperature.HOT},
+                null,
+                new treeCoverage[]{treeCoverage.DENSE, treeCoverage.FOREST, treeCoverage.RAINFOREST},
+                null,
+                new boolean[] {false}
+        );
+
+        //frozen sparse land without snow (very dry, highly seasonal siberia-like interiors)
+        addBiome(builder, BiomePalette.TAIGA_SPARSE,
+                new elevation[] {elevation.LOWLAND, elevation.MIDLAND, elevation.MOUNTAIN},
+                new temperature[] {temperature.FROZEN},
+                null,
+                new treeCoverage[]{treeCoverage.SPARSE},
+                null,
+                new boolean[] {false}
+        );
+
+
+        // Convert List<Short> values to short[] in the flat ordinal-indexed table for cache-friendly access
+        short[][] result = new short[6 * 6 * 3 * 6 * 6 * 2][];
         builder.forEach((key, list) -> {
             short[] arr = new short[list.size()];
             for (int i = 0; i < arr.length; i++) arr[i] = list.get(i);
-            result.put(key, arr);
+            result[tableIndex(key.elev(), key.temp(), key.slope(), key.treecover(), key.moist(), key.snow())] = arr;
         });
-        BIOME_MAP = result;
+        BIOME_TABLE = result;
         long elapsedMs = (System.nanoTime() - startTime) / 1_000_000;
-        LOG.info("BIOME_MAP built: {} entries in {} ms", BIOME_MAP.size(), elapsedMs);
+        LOG.info("BIOME_TABLE built: {} entries in {} ms", builder.size(), elapsedMs);
     }
 
     /**
@@ -432,9 +515,9 @@ public final class BiomeClassifier {
                 float pn = PRECIP_NOISE.GetNoise(nx, ny);
                 precipNoiseFact[idx] = 1.0f + 0.2f * pn;
 
-                float snc = SNOW_NOISE.GetNoise(nx, ny);
-                float snf = SNOW_NOISE_FINE.GetNoise(nx, ny);
-                snowNoise[idx] = 3.0f * snc + 2.0f * snf;
+                //SNOW_NOISE/SNOW_NOISE_FINE were configured identically to TEMP_NOISE/TEMP_NOISE_FINE,
+                //so reuse those samples instead of computing the same perlin octaves twice
+                snowNoise[idx] = 3.0f * tnc + 2.0f * tnf;
 
                 warpvector.x = nx; warpvector.y = ny; //mfw this is the only thing that fastnoiselite uses vectors for wtf
                 BIOME_NOISE_WARP.DomainWarp(warpvector);
@@ -565,13 +648,9 @@ public final class BiomeClassifier {
                 else if (treeMoisture >= 1.15f || precip > 1250f)   Moisture = moisture.VERY_MOIST;
                 else                                                Moisture = moisture.MOIST;
 
-                                                        //probably an insane memory leak
-                BiomeClassifier.climate climateResult = new climate(Elev, Temp, Slope, Cover, Moisture, hasSnow);
-
-
                 // Look up matching biomes and randomize based on cell noise
-                short[] biomes = BIOME_MAP.get(climateResult);
-                out[idx] = (biomes != null) ? biomes[0] : BiomePalette.OCEAN;
+                // (flat table lookup keeps this loop free of record allocation + hashing)
+                short[] biomes = BIOME_TABLE[tableIndex(Elev, Temp, Slope, Cover, Moisture, hasSnow)];
                 if (biomes == null || biomes.length == 0) {
                     //using ocean for a fallback as its more obvious when there's a null condition
                     //may seem counterintuitive but im doing this so i know where i need to fix

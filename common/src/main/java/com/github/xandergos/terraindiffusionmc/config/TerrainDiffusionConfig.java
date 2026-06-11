@@ -26,6 +26,9 @@ public final class TerrainDiffusionConfig {
         }
     }
 
+    // Parsed once after defaults/overrides are loaded; tileSize() is on the per-block hot path.
+    private static final int TILE_SIZE = computeTileSize();
+
     private TerrainDiffusionConfig() {
     }
 
@@ -67,6 +70,10 @@ public final class TerrainDiffusionConfig {
 
     /** Region side length in blocks. Must be a positive power of 2 (128, 256, 512, ...). */
     public static int tileSize() {
+        return TILE_SIZE;
+    }
+
+    private static int computeTileSize() {
         int configuredTileSize = readInt("tile_size", DEFAULT_TILE_SIZE);
         if (configuredTileSize <= 0 || !isPowerOfTwo(configuredTileSize)) {
             System.err.println("Invalid tile_size: " + configuredTileSize + ", using default " + DEFAULT_TILE_SIZE);

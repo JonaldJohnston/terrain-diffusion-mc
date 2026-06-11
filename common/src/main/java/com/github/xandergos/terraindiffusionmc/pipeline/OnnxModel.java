@@ -46,7 +46,7 @@ public final class OnnxModel implements AutoCloseable {
     private final OrtEnvironment env;
     private final byte[] optimizedModelBytes;
     private final String name;
-    private OrtSession cpuSession;    // non-null in CPU-only mode
+    private OrtSession cpuSession;    // non-null in CPU-only mode (configured, or no GPU provider available)
     private OrtSession gpuSession;    // non-null when offload_models=false
 
     private static final class OptimizedModelLoadResult {
@@ -150,6 +150,8 @@ public final class OnnxModel implements AutoCloseable {
         if ("cpu".equals(TerrainDiffusionConfig.inferenceDevice())) {
             OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
             sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+            // Don't let idle intra-op threads spin-wait; the game's own threads need the cores.
+            sessionOptions.addConfigEntry("session.intra_op.allow_spinning", "0");
             this.cpuSession = env.createSession(modelBytes, sessionOptions);
             this.gpuSession = null;
             setResolvedProviderOnce("CPU");
@@ -160,6 +162,8 @@ public final class OnnxModel implements AutoCloseable {
         if (!TerrainDiffusionConfig.offloadModels()) {
             OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
             sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+            // Don't let idle intra-op threads spin-wait; the game's own threads need the cores.
+            sessionOptions.addConfigEntry("session.intra_op.allow_spinning", "0");
             addGpuProvider(sessionOptions);
             if ("CoreML".equals(resolvedInferenceProvider)) {
                 throw new OrtException(
@@ -250,6 +254,10 @@ public final class OnnxModel implements AutoCloseable {
         }
         synchronized (GPU_SLOT_LOCK) {
             claimGpuSlot();
+            if (cpuSession != null) {
+                // claimGpuSlot fell back to a persistent CPU session (no GPU provider).
+                return runWithSession(cpuSession, inputs);
+            }
             return runWithSession(activeGpuSession, inputs);
         }
     }
@@ -270,6 +278,9 @@ public final class OnnxModel implements AutoCloseable {
     /**
      * Evicts the current GPU session if this model doesn't hold the slot,
      * then creates a fresh GPU session from CPU-cached weights.
+     * If no GPU provider is available, falls back to a persistent per-model
+     * CPU session instead: swapping a plain CPU session through the slot saves
+     * no VRAM and would rebuild the graph on every model switch.
      * Must be called under GPU_SLOT_LOCK.
      */
     private void claimGpuSlot() {
@@ -286,7 +297,13 @@ public final class OnnxModel implements AutoCloseable {
         try {
             OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
             opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
-            addGpuProvider(opts);
+            // Don't let idle intra-op threads spin-wait; the game's own threads need the cores.
+            opts.addConfigEntry("session.intra_op.allow_spinning", "0");
+            if (!addGpuProvider(opts)) {
+                this.cpuSession = env.createSession(optimizedModelBytes, opts);
+                LOG.debug("No GPU provider; persistent CPU session ready for '{}'", name);
+                return;
+            }
             activeGpuSession = env.createSession(optimizedModelBytes, opts);
             gpuSlotHolder = this;
             LOG.debug("GPU session ready for '{}'", name);
@@ -295,7 +312,8 @@ public final class OnnxModel implements AutoCloseable {
         }
     }
 
-    private static void addGpuProvider(OrtSession.SessionOptions opts) throws OrtException {
+    /** Adds the best available GPU provider to {@code opts}. Returns {@code false} if none was added. */
+    private static boolean addGpuProvider(OrtSession.SessionOptions opts) throws OrtException {
         boolean gpuRequired = "gpu".equals(TerrainDiffusionConfig.inferenceDevice());
         boolean added = false;
 
@@ -355,6 +373,7 @@ public final class OnnxModel implements AutoCloseable {
                 LOG.warn("No GPU provider loaded. Check drivers and that the mod jar is the GPU build.");
             }
         }
+        return added;
     }
 
     private static float[] runWithSession(OrtSession session, Object[][] inputs) {

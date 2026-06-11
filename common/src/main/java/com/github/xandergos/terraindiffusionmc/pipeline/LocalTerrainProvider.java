@@ -65,6 +65,8 @@ public final class LocalTerrainProvider {
     private static final int MAX_CACHE_SIZE_HEADROOM = 8;
     private static final Map<CacheKey, CacheEntry> CACHE = new ConcurrentHashMap<>();
     private static final AtomicLong CACHE_CLOCK = new AtomicLong();
+    /** Bumped on every seed change; tiles computed under an old generation must not repopulate CACHE. */
+    private static final AtomicLong SEED_GENERATION = new AtomicLong();
     private static final Map<CacheKey, Future<HeightmapData>> PENDING = new ConcurrentHashMap<>();
     /** Single thread for pipeline.get() so MemoryTileStore is not accessed concurrently. */
     private static final ExecutorService INFERENCE_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
@@ -93,10 +95,21 @@ public final class LocalTerrainProvider {
             INSTANCE = new LocalTerrainProvider(seed, models);
             instanceSeed = seed;
         } else if (instanceSeed != seed) {
-            INSTANCE.pipeline.setSeed(seed);
-            instanceSeed = seed;
-            CACHE.clear();
-            PENDING.clear();
+            // Route the seed change through the inference thread (like changeSeedFromExplorer)
+            // so it serializes behind any in-flight tile task: MemoryTileStore is only safe on
+            // the inference thread, and a stale tile must not repopulate the cleared caches.
+            try {
+                submitToInferenceThread(() -> {
+                    INSTANCE.pipeline.setSeed(seed);
+                    instanceSeed = seed;
+                    CACHE.clear();
+                    PENDING.clear();
+                    SEED_GENERATION.incrementAndGet();
+                    return null;
+                });
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to change terrain pipeline seed", e);
+            }
         }
     }
 
@@ -159,6 +172,7 @@ public final class LocalTerrainProvider {
             instanceSeed = newSeed;
             CACHE.clear();
             PENDING.clear();
+            SEED_GENERATION.incrementAndGet();
             return null;
         });
     }
@@ -184,7 +198,14 @@ public final class LocalTerrainProvider {
         CacheKey key = new CacheKey(i1, j1, i2, j2);
         CacheEntry cached = CACHE.get(key);
         if (cached != null) {
-            cached.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
+            // Coarse LRU bump: only advance the shared clock when this entry is stale.
+            // This path runs once per block during chunkgen, so an unconditional
+            // incrementAndGet would bounce the CACHE_CLOCK cache line between every
+            // chunk worker thread; eviction only needs approximate recency ordering.
+            long now = CACHE_CLOCK.get();
+            if (now - cached.lastAccessed.get() > 1) {
+                cached.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
+            }
             return cached.data;
         }
 
@@ -194,6 +215,7 @@ public final class LocalTerrainProvider {
     private HeightmapData genHeightmap(CacheKey key, int i1, int j1, int i2, int j2) {
         int scale = WorldScaleManager.getCurrentScale();
         FutureTask<HeightmapData> task = new FutureTask<>(() -> {
+            long seedGeneration = SEED_GENERATION.get();
             long computedWindowCountBefore = pipeline.getTotalComputedWindowCount();
             HeightmapData data = scale <= 1
                     ? handle1x(i1, j1, i2, j2)
@@ -206,8 +228,12 @@ public final class LocalTerrainProvider {
             LOG.info(
                     "Terrain Diffusion ({}) finished generating region {}x{} ({} newly computed windows)",
                     OnnxModel.getResolvedInferenceProvider(), regionWidth, regionHeight, newlyComputedWindowCount);
-            CACHE.put(key, new CacheEntry(data, new AtomicLong(CACHE_CLOCK.incrementAndGet())));
-            evictLruTo(MAX_CACHE_SIZE);
+            // Skip the cache write if the seed changed while this tile was computing —
+            // a pre-seed-change tile must never poison the post-change cache.
+            if (seedGeneration == SEED_GENERATION.get()) {
+                CACHE.put(key, new CacheEntry(data, new AtomicLong(CACHE_CLOCK.incrementAndGet())));
+                evictLruTo(MAX_CACHE_SIZE);
+            }
             PENDING.remove(key);
             return data;
         });
@@ -223,8 +249,15 @@ public final class LocalTerrainProvider {
         }
         try {
             return toRun.get();
+        } catch (InterruptedException e) {
+            // The task is still running on INFERENCE_EXECUTOR; leave its PENDING entry in
+            // place (it removes itself on success) so a later request joins it instead of
+            // submitting a duplicate full-tile computation.
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted waiting for terrain tile: " + key, e);
         } catch (Exception e) {
-            PENDING.remove(key);
+            // Two-arg remove so a newer entry inserted by a retry is never removed.
+            if (toRun.isDone()) PENDING.remove(key, toRun);
             throw new RuntimeException("Terrain tile failed: " + key, e);
         }
     }

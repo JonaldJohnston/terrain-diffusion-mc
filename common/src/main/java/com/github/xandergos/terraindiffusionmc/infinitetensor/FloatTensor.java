@@ -52,28 +52,40 @@ public class FloatTensor {
     public void addFrom(FloatTensor src, int[][] dstRegion, int[][] srcRegion) {
         int n = shape.length;
         int[] count = new int[n];
-        int total = 1;
         for (int d = 0; d < n; d++) {
             count[d] = dstRegion[d][1] - dstRegion[d][0];
-            total *= count[d];
-        }
-        if (total == 0) return;
-
-        // Compute strides for iterating over the count-shaped region
-        int[] iterStrides = new int[n];
-        iterStrides[n - 1] = 1;
-        for (int d = n - 2; d >= 0; d--) {
-            iterStrides[d] = iterStrides[d + 1] * count[d + 1];
+            if (count[d] == 0) return;
         }
 
-        for (int flat = 0; flat < total; flat++) {
-            int dstFlat = 0, srcFlat = 0;
-            for (int d = 0; d < n; d++) {
-                int idx = (flat / iterStrides[d]) % count[d];
-                dstFlat += (dstRegion[d][0] + idx) * strides[d];
-                srcFlat += (srcRegion[d][0] + idx) * src.strides[d];
+        // Base offsets of the region start in each tensor
+        int dstBase = 0, srcBase = 0;
+        for (int d = 0; d < n; d++) {
+            dstBase += dstRegion[d][0] * strides[d];
+            srcBase += srcRegion[d][0] * src.strides[d];
+        }
+
+        // The last dimension is contiguous in both tensors (C-order, stride 1),
+        // so run a tight inner loop over it and walk the outer dimensions with
+        // an odometer - no div/mod per element.
+        int last = count[n - 1];
+        int[] idx = new int[n];
+        while (true) {
+            for (int i = 0; i < last; i++) {
+                data[dstBase + i] += src.data[srcBase + i];
             }
-            data[dstFlat] += src.data[srcFlat];
+            int d = n - 2;
+            while (d >= 0) {
+                idx[d]++;
+                dstBase += strides[d];
+                srcBase += src.strides[d];
+                if (idx[d] < count[d]) break;
+                // Rewind this dimension and carry into the next outer one
+                idx[d] = 0;
+                dstBase -= count[d] * strides[d];
+                srcBase -= count[d] * src.strides[d];
+                d--;
+            }
+            if (d < 0) break;
         }
     }
 

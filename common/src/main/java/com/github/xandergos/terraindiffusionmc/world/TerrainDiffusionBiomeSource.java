@@ -40,6 +40,19 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
 
     private HolderGetter<Biome> biomeLookup;
     private Map<Short, Holder<Biome>> biomeIdMap = null;
+    /** Dense biome-id lookup for the hot path; avoids Short boxing/hashing. Ids are small (max 116). */
+    private Holder<Biome>[] biomeIdArray = null;
+    private Holder<Biome> defaultBiome = null;
+
+    /** Per-thread memo of the last fetched tile. getNoiseBiome ignores y but is called for
+     *  every 4x4x4 quart cell, so nearly all calls in a chunk reuse the previous tile fetch. */
+    private static final class TileMemo {
+        long seed;
+        int scale = -1;
+        int blockStartX, blockStartZ, blockEndX, blockEndZ;
+        HeightmapData data;
+    }
+    private static final ThreadLocal<TileMemo> TILE_MEMO = ThreadLocal.withInitial(TileMemo::new);
 
     public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup) {
         this.biomeLookup = biomeLookup;
@@ -50,9 +63,10 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         return CODEC;
     }
 
+    @SuppressWarnings("unchecked")
     private void requireBiomeIdMap() {
         if (biomeIdMap == null) {
-            biomeIdMap = Map.ofEntries(
+            Map<Short, Holder<Biome>> map = Map.ofEntries(
                     entry((short) 1, this.biomeLookup.getOrThrow(Biomes.PLAINS)),
                     entry((short) 3, this.biomeLookup.getOrThrow(Biomes.SNOWY_PLAINS)),
                     entry((short) 5, this.biomeLookup.getOrThrow(Biomes.DESERT)),
@@ -77,6 +91,13 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
                     entry((short) 115, this.biomeLookup.getOrThrow(TAIGA_SPARSE)),
                     entry((short) 116, this.biomeLookup.getOrThrow(SNOWY_TAIGA_SPARSE))
             );
+            Holder<Biome>[] array = new Holder[128];
+            for (Map.Entry<Short, Holder<Biome>> e : map.entrySet()) {
+                array[e.getKey()] = e.getValue();
+            }
+            this.defaultBiome = map.get((short) 1);
+            this.biomeIdArray = array;
+            this.biomeIdMap = map;
         }
     }
 
@@ -89,32 +110,44 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     @Override
     public Holder<Biome> getNoiseBiome(int x, int y, int z, Climate.Sampler noise) {
         requireBiomeIdMap();
-        Holder<Biome> defaultEntry = biomeIdMap.get((short) 1);
 
         // x, y, z are in quart coordinates (block / 4)
         int blockX = QuartPos.toBlock(x);
         int blockZ = QuartPos.toBlock(z);
 
-        int tileSize = TerrainDiffusionConfig.tileSize();
-        int tileShift = Integer.numberOfTrailingZeros(tileSize);
+        // Reuse the last tile fetched on this thread; re-key on seed/scale so the memo
+        // never outlives a cache clear from changeSeedFromExplorer or a scale change.
+        TileMemo memo = TILE_MEMO.get();
+        long seed = LocalTerrainProvider.getSeed();
+        int scale = WorldScaleManager.getCurrentScale();
+        if (memo.data == null || memo.seed != seed || memo.scale != scale
+                || blockX < memo.blockStartX || blockX >= memo.blockEndX
+                || blockZ < memo.blockStartZ || blockZ >= memo.blockEndZ) {
+            int tileSize = TerrainDiffusionConfig.tileSize();
+            int tileShift = Integer.numberOfTrailingZeros(tileSize);
 
-        int tileX = blockX >> tileShift;
-        int tileZ = blockZ >> tileShift;
-
-        int blockStartX = tileX << tileShift;
-        int blockStartZ = tileZ << tileShift;
-        int blockEndX = blockStartX + tileSize;
-        int blockEndZ = blockStartZ + tileSize;
-
-        HeightmapData data = LocalTerrainProvider.getInstance().fetchHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
-        if (data != null && data.biomeIds != null) {
-            int localX = Math.max(0, Math.min(data.width  - 1, blockX - blockStartX));
-            int localZ = Math.max(0, Math.min(data.height - 1, blockZ - blockStartZ));
-            Holder<Biome> entry = biomeIdMap.get(data.biomeIds[localZ][localX]);
-            if (entry != null) return entry;
+            memo.blockStartX = (blockX >> tileShift) << tileShift;
+            memo.blockStartZ = (blockZ >> tileShift) << tileShift;
+            memo.blockEndX = memo.blockStartX + tileSize;
+            memo.blockEndZ = memo.blockStartZ + tileSize;
+            memo.seed = seed;
+            memo.scale = scale;
+            memo.data = LocalTerrainProvider.getInstance()
+                    .fetchHeightmap(memo.blockStartZ, memo.blockStartX, memo.blockEndZ, memo.blockEndX);
         }
 
-        return defaultEntry;
+        HeightmapData data = memo.data;
+        if (data != null && data.biomeIds != null) {
+            int localX = Math.max(0, Math.min(data.width  - 1, blockX - memo.blockStartX));
+            int localZ = Math.max(0, Math.min(data.height - 1, blockZ - memo.blockStartZ));
+            short biomeId = data.biomeIds[localZ][localX];
+            if (biomeId >= 0 && biomeId < biomeIdArray.length) {
+                Holder<Biome> entry = biomeIdArray[biomeId];
+                if (entry != null) return entry;
+            }
+        }
+
+        return defaultBiome;
     }
 
     @Override

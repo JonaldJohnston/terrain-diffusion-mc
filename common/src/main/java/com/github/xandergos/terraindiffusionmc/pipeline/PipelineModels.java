@@ -35,6 +35,9 @@ public final class PipelineModels implements AutoCloseable {
         loadStarted = true;
         loadFailure = null;
         loadDone = new CountDownLatch(1);
+        // Capture the latch so a retried load() swapping loadDone cannot make
+        // this thread count down the wrong (new) latch.
+        final CountDownLatch latch = loadDone;
         Thread t = new Thread(() -> {
             try {
                 LOG.info("Loading terrain-diffusion ML models (background)...");
@@ -44,10 +47,14 @@ public final class PipelineModels implements AutoCloseable {
                 LOG.info("Terrain-diffusion ML models loaded in {} ms", elapsed);
             } catch (Throwable e) {
                 loadFailure = e;
-                loadStarted = false;
                 LOG.error("Failed to load terrain-diffusion models", e);
             } finally {
-                loadDone.countDown();
+                latch.countDown();
+                // Allow a retry only after the latch is released, so a new
+                // load() cannot start while this one still owes a countDown.
+                if (INSTANCE == null) {
+                    loadStarted = false;
+                }
             }
         }, "terrain-diffusion-models");
         t.setDaemon(true);
