@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
 import com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle;
+import com.github.xandergos.terraindiffusionmc.pipeline.FastNoiseLite;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
 import com.mojang.datafixers.util.Pair;
@@ -83,6 +84,41 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
      *  region, so each contiguous region of one climate resolves to a single variant biome
      *  instead of a mix. */
     private static final int VARIANT_CELL_BITS = 11;
+
+    /** Domain-warp displacement (blocks) applied to the Voronoi sample position. Without it,
+     *  patch boundaries are straight polygon edges; warping by low-frequency FBm noise makes
+     *  them meander like noise contours while keeping the uniform per-patch variant pick. */
+    private static final float WARP_AMPLITUDE = 0.2f * (1 << VARIANT_CELL_BITS);
+
+    /** Seed-keyed FBm pair used to domain-warp the variant Voronoi lookup. FastNoiseLite is
+     *  immutable after configuration, so a stale read just rebuilds the same pair. */
+    private record WarpNoise(long seed, FastNoiseLite x, FastNoiseLite z) {
+        static WarpNoise create(long seed) {
+            return new WarpNoise(seed, makeFbm(mix(seed, 0xA5F1, 0)), makeFbm(mix(seed, 0x3C6E, 0)));
+        }
+
+        private static FastNoiseLite makeFbm(long noiseSeed) {
+            FastNoiseLite fnl = new FastNoiseLite((int) noiseSeed);
+            fnl.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+            fnl.SetFrequency(1f / 600f);
+            fnl.SetFractalType(FastNoiseLite.FractalType.FBm);
+            fnl.SetFractalOctaves(3);
+            fnl.SetFractalLacunarity(2f);
+            fnl.SetFractalGain(0.5f);
+            return fnl;
+        }
+    }
+
+    private static volatile WarpNoise warpNoise;
+
+    private static WarpNoise warpFor(long seed) {
+        WarpNoise warp = warpNoise;
+        if (warp == null || warp.seed() != seed) {
+            warp = WarpNoise.create(seed);
+            warpNoise = warp;
+        }
+        return warp;
+    }
 
     private HolderGetter<Biome> biomeLookup;
     private Map<Short, Holder<Biome>> biomeIdMap = null;
@@ -223,11 +259,17 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         return Stream.concat(base, Arrays.stream(table).filter(Objects::nonNull).flatMap(Arrays::stream));
     }
 
-    /** Jittered-Voronoi pick: hash the 3x3 neighborhood of ~2048-block cells around the position,
-     *  take the nearest jittered cell center, and use its hash to choose a variant. The layout is
-     *  the same for every category, so all variant changes happen on the same sparse patch
-     *  boundaries and a contiguous climate region is normally a single variant throughout. */
+    /** Jittered-Voronoi pick: hash the 3x3 neighborhood of ~2048-block cells around the
+     *  (domain-warped) position, take the nearest jittered cell center, and use its hash to
+     *  choose a variant. The layout is the same for every category, so all variant changes
+     *  happen on the same sparse patch boundaries and a contiguous climate region is normally
+     *  a single variant throughout. */
     private static int variantIndex(long seed, int blockX, int blockZ, int count) {
+        WarpNoise warp = warpFor(seed);
+        int warpedX = blockX + (int) (warp.x().GetNoise(blockX, blockZ) * WARP_AMPLITUDE);
+        int warpedZ = blockZ + (int) (warp.z().GetNoise(blockX, blockZ) * WARP_AMPLITUDE);
+        blockX = warpedX;
+        blockZ = warpedZ;
         int cellX = blockX >> VARIANT_CELL_BITS;
         int cellZ = blockZ >> VARIANT_CELL_BITS;
         int jitterMask = (1 << VARIANT_CELL_BITS) - 1;
