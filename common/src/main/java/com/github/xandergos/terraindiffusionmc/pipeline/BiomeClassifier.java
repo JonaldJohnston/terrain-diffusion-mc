@@ -468,9 +468,78 @@ public final class BiomeClassifier {
             for (int i = 0; i < arr.length; i++) arr[i] = list.get(i);
             result[tableIndex(key.elev(), key.temp(), key.slope(), key.treecover(), key.moist(), key.snow())] = arr;
         });
+        int filled = fillTableGaps(result);
         BIOME_TABLE = result;
         long elapsedMs = (System.nanoTime() - startTime) / 1_000_000;
-        LOG.info("BIOME_TABLE built: {} entries in {} ms", builder.size(), elapsedMs);
+        LOG.info("BIOME_TABLE built: {} entries ({} gaps filled from nearest neighbors) in {} ms",
+                builder.size(), filled, elapsedMs);
+    }
+
+    /**
+     * Fills every empty table slot with the entry of the nearest filled slot in climate space,
+     * so no land combination can fall through to the OCEAN sentinel (which previously produced
+     * sandy "ocean" biomes above sea level, complete with shipwrecks). Ocean-elevation slots only
+     * borrow from ocean slots and land slots only from land slots, so the land/sea boundary the
+     * elevation channel defines is never crossed. Returns the number of slots filled.
+     */
+    private static int fillTableGaps(short[][] table) {
+        elevation[] elevs = elevation.values();
+        temperature[] temps = temperature.values();
+        slope[] slopes = slope.values();
+        treeCoverage[] covers = treeCoverage.values();
+        moisture[] moists = moisture.values();
+
+        // Candidates come from a snapshot so a filled gap never becomes a (closer)
+        // source for a later gap — results stay independent of iteration order.
+        short[][] source = table.clone();
+
+        int filled = 0;
+        for (int idx = 0; idx < table.length; idx++) {
+            if (table[idx] != null && table[idx].length > 0) continue;
+
+            // Decode the flat index back into its climate components.
+            int rest = idx;
+            int snow = rest % 2; rest /= 2;
+            int moist = rest % 6; rest /= 6;
+            int cover = rest % 6; rest /= 6;
+            int slopeOrd = rest % 3; rest /= 3;
+            int temp = rest % 6; rest /= 6;
+            int elev = rest;
+            boolean isOcean = elev <= elevation.OCEAN.ordinal();
+
+            int bestDist = Integer.MAX_VALUE;
+            short[] best = null;
+            for (int e = 0; e < elevs.length; e++) {
+                if ((e <= elevation.OCEAN.ordinal()) != isOcean) continue;
+                for (int t = 0; t < temps.length; t++) {
+                    for (int s = 0; s < slopes.length; s++) {
+                        for (int c = 0; c < covers.length; c++) {
+                            for (int m = 0; m < moists.length; m++) {
+                                for (int sn = 0; sn < 2; sn++) {
+                                    short[] candidate = source[tableIndex(elevs[e], temps[t], slopes[s], covers[c], moists[m], sn == 1)];
+                                    if (candidate == null || candidate.length == 0) continue;
+                                    int dist = 10 * Math.abs(t - temp)
+                                            + 6 * Math.abs(e - elev)
+                                            + 4 * Math.abs(s - slopeOrd)
+                                            + 3 * Math.abs(c - cover)
+                                            + 2 * Math.abs(m - moist)
+                                            + Math.abs(sn - snow);
+                                    if (dist < bestDist) {
+                                        bestDist = dist;
+                                        best = candidate;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (best != null) {
+                table[idx] = best;
+                filled++;
+            }
+        }
+        return filled;
     }
 
     /**
@@ -652,10 +721,9 @@ public final class BiomeClassifier {
                 // (flat table lookup keeps this loop free of record allocation + hashing)
                 short[] biomes = BIOME_TABLE[tableIndex(Elev, Temp, Slope, Cover, Moisture, hasSnow)];
                 if (biomes == null || biomes.length == 0) {
-                    //using ocean for a fallback as its more obvious when there's a null condition
-                    //may seem counterintuitive but im doing this so i know where i need to fix
-                    //rather than just cover it up
-                    out[idx] = BiomePalette.OCEAN;
+                    // Unreachable since fillTableGaps completes the table; plains (not the old
+                    // OCEAN sentinel) so a regression can never put ocean biomes on land again.
+                    out[idx] = isOcean ? BiomePalette.OCEAN : BiomePalette.PLAINS;
                 }
                 else if (biomes.length == 1) {
                     out[idx] = biomes[0];
