@@ -1,0 +1,8 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "terralith:shield_clearing", "required": false },
+    { "id": "terralith:lush_valley", "required": false },
+    { "id": "regions_unexplored:sparse_redwoods", "required": false }
+  ]
+}

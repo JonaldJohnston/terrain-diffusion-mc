@@ -1,0 +1,21 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "terralith:alpine_highlands", "required": false },
+    { "id": "terralith:blooming_plateau", "required": false },
+    { "id": "terralith:blooming_valley", "required": false },
+    { "id": "terralith:highlands", "required": false },
+    { "id": "terralith:lavender_valley", "required": false },
+    { "id": "terralith:moonlight_valley", "required": false },
+    { "id": "terralith:mountain_steppe", "required": false },
+    { "id": "terralith:temperate_highlands", "required": false },
+    { "id": "biomeswevegone:coconino_meadow", "required": false },
+    { "id": "biomeswevegone:rose_fields", "required": false },
+    { "id": "biomeswevegone:sakura_grove", "required": false },
+    { "id": "regions_unexplored:highland_fields", "required": false },
+    { "id": "regions_unexplored:wisteria_grove", "required": false },
+    { "id": "regions_unexplored:magnolia_woodland", "required": false },
+    { "id": "regions_unexplored:rocky_meadow", "required": false },
+    { "id": "regions_unexplored:mauve_hills", "required": false }
+  ]
+}

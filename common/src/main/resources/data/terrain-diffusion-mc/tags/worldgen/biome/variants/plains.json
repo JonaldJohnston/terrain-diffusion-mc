@@ -1,0 +1,20 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "terralith:steppe", "required": false },
+    { "id": "terralith:valley_clearing", "required": false },
+    { "id": "biomeswevegone:allium_shrubland", "required": false },
+    { "id": "biomeswevegone:amaranth_grassland", "required": false },
+    { "id": "biomeswevegone:prairie", "required": false },
+    { "id": "biomeswevegone:pumpkin_valley", "required": false },
+    { "id": "regions_unexplored:clover_plains", "required": false },
+    { "id": "regions_unexplored:grassland", "required": false },
+    { "id": "regions_unexplored:prairie", "required": false },
+    { "id": "regions_unexplored:flower_fields", "required": false },
+    { "id": "regions_unexplored:poppy_fields", "required": false },
+    { "id": "regions_unexplored:shrubland", "required": false },
+    { "id": "regions_unexplored:steppe", "required": false },
+    { "id": "regions_unexplored:barley_fields", "required": false },
+    { "id": "regions_unexplored:pumpkin_fields", "required": false }
+  ]
+}

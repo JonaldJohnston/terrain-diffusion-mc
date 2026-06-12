@@ -1,0 +1,20 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "terralith:arid_highlands", "required": false },
+    { "id": "terralith:ashen_savanna", "required": false },
+    { "id": "terralith:brushland", "required": false },
+    { "id": "terralith:fractured_savanna", "required": false },
+    { "id": "terralith:hot_shrubland", "required": false },
+    { "id": "terralith:rocky_shrubland", "required": false },
+    { "id": "terralith:savanna_slopes", "required": false },
+    { "id": "terralith:shrubland", "required": false },
+    { "id": "biomeswevegone:araucaria_savanna", "required": false },
+    { "id": "biomeswevegone:baobab_savanna", "required": false },
+    { "id": "biomeswevegone:firecracker_chaparral", "required": false },
+    { "id": "biomeswevegone:ironwood_gour", "required": false },
+    { "id": "regions_unexplored:baobab_savanna", "required": false },
+    { "id": "regions_unexplored:dry_bushland", "required": false },
+    { "id": "regions_unexplored:ashen_woodland", "required": false }
+  ]
+}

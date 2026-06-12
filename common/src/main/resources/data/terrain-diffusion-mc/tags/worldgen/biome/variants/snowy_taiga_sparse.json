@@ -1,0 +1,7 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "terralith:cold_shrubland", "required": false },
+    { "id": "terralith:wintry_lowlands", "required": false }
+  ]
+}

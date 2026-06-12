@@ -1,0 +1,16 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "terralith:orchid_swamp", "required": false },
+    { "id": "biomeswevegone:bayou", "required": false },
+    { "id": "biomeswevegone:cypress_swamplands", "required": false },
+    { "id": "biomeswevegone:cypress_wetlands", "required": false },
+    { "id": "biomeswevegone:pale_bog", "required": false },
+    { "id": "biomeswevegone:white_mangrove_marshes", "required": false },
+    { "id": "regions_unexplored:bayou", "required": false },
+    { "id": "regions_unexplored:old_growth_bayou", "required": false },
+    { "id": "regions_unexplored:marsh", "required": false },
+    { "id": "regions_unexplored:fen", "required": false },
+    { "id": "regions_unexplored:fungal_fen", "required": false }
+  ]
+}
