@@ -79,9 +79,11 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
             entry((short) 115, "taiga_sparse"),
             entry((short) 116, "snowy_taiga_sparse"));
 
-    /** Side length (log2, in blocks) of a variant patch: each ~512x512 jittered-Voronoi
-     *  region of a category uniformly picks one variant, so modded biomes form coherent areas. */
-    private static final int VARIANT_CELL_BITS = 9;
+    /** Side length (log2, in blocks) of a variant patch. The jittered-Voronoi layout is shared
+     *  by every category and its patches (~2048 blocks) are much larger than a typical climate
+     *  region, so each contiguous region of one climate resolves to a single variant biome
+     *  instead of a mix. */
+    private static final int VARIANT_CELL_BITS = 11;
 
     private HolderGetter<Biome> biomeLookup;
     private Map<Short, Holder<Biome>> biomeIdMap = null;
@@ -232,10 +234,11 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         return Stream.concat(base, Arrays.stream(table).filter(Objects::nonNull).flatMap(Arrays::stream));
     }
 
-    /** Jittered-Voronoi pick: hash the 3x3 neighborhood of ~512-block cells around the position,
-     *  take the nearest jittered cell center, and use its hash to choose a variant. Patch layout
-     *  is independent per category (biomeId is mixed into the cell hash). */
-    private static int variantIndex(long seed, int blockX, int blockZ, int biomeId, int count) {
+    /** Jittered-Voronoi pick: hash the 3x3 neighborhood of ~2048-block cells around the position,
+     *  take the nearest jittered cell center, and use its hash to choose a variant. The layout is
+     *  the same for every category, so all variant changes happen on the same sparse patch
+     *  boundaries and a contiguous climate region is normally a single variant throughout. */
+    private static int variantIndex(long seed, int blockX, int blockZ, int count) {
         int cellX = blockX >> VARIANT_CELL_BITS;
         int cellZ = blockZ >> VARIANT_CELL_BITS;
         int jitterMask = (1 << VARIANT_CELL_BITS) - 1;
@@ -245,7 +248,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
             for (int dz = -1; dz <= 1; dz++) {
                 int cx = cellX + dx;
                 int cz = cellZ + dz;
-                long h = mix(seed ^ (0x9E3779B97F4A7C15L * (biomeId + 1)), cx, cz);
+                long h = mix(seed, cx, cz);
                 int centerX = (cx << VARIANT_CELL_BITS) + (int) (h & jitterMask);
                 int centerZ = (cz << VARIANT_CELL_BITS) + (int) ((h >>> 20) & jitterMask);
                 long ddx = centerX - blockX;
@@ -311,7 +314,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
                     Holder<Biome>[][] table = this.variantTable;
                     Holder<Biome>[] variants = table == null ? null : table[biomeId];
                     if (variants != null) {
-                        return variants[variantIndex(seed, blockX, blockZ, biomeId, variants.length)];
+                        return variants[variantIndex(seed, blockX, blockZ, variants.length)];
                     }
                     return entry;
                 }
