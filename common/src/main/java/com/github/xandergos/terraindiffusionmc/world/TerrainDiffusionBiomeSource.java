@@ -1,7 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
 import com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle;
-import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
 import com.mojang.datafixers.util.Pair;
@@ -93,16 +92,6 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     /** Per-category variant lists (base biome first, then resolved tag members); null entry = no variants.
      *  Built lazily and only cached once tags are bound, so a pre-bind call retries later. */
     private Holder<Biome>[][] variantTable = null;
-
-    /** Per-thread memo of the last fetched tile. getNoiseBiome ignores y but is called for
-     *  every 4x4x4 quart cell, so nearly all calls in a chunk reuse the previous tile fetch. */
-    private static final class TileMemo {
-        long seed;
-        int scale = -1;
-        int blockStartX, blockStartZ, blockEndX, blockEndZ;
-        HeightmapData data;
-    }
-    private static final ThreadLocal<TileMemo> TILE_MEMO = ThreadLocal.withInitial(TileMemo::new);
 
     public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup) {
         this.biomeLookup = biomeLookup;
@@ -281,27 +270,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         int blockX = QuartPos.toBlock(x);
         int blockZ = QuartPos.toBlock(z);
 
-        // Reuse the last tile fetched on this thread; re-key on seed/scale so the memo
-        // never outlives a cache clear from changeSeedFromExplorer or a scale change.
-        TileMemo memo = TILE_MEMO.get();
-        long seed = LocalTerrainProvider.getSeed();
-        int scale = WorldScaleManager.getCurrentScale();
-        if (memo.data == null || memo.seed != seed || memo.scale != scale
-                || blockX < memo.blockStartX || blockX >= memo.blockEndX
-                || blockZ < memo.blockStartZ || blockZ >= memo.blockEndZ) {
-            int tileSize = TerrainDiffusionConfig.tileSize();
-            int tileShift = Integer.numberOfTrailingZeros(tileSize);
-
-            memo.blockStartX = (blockX >> tileShift) << tileShift;
-            memo.blockStartZ = (blockZ >> tileShift) << tileShift;
-            memo.blockEndX = memo.blockStartX + tileSize;
-            memo.blockEndZ = memo.blockStartZ + tileSize;
-            memo.seed = seed;
-            memo.scale = scale;
-            memo.data = LocalTerrainProvider.getInstance()
-                    .fetchHeightmap(memo.blockStartZ, memo.blockStartX, memo.blockEndZ, memo.blockEndX);
-        }
-
+        LocalTerrainProvider.TileMemo memo = LocalTerrainProvider.tileAt(blockX, blockZ);
         HeightmapData data = memo.data;
         if (data != null && data.biomeIds != null) {
             int localX = Math.max(0, Math.min(data.width  - 1, blockX - memo.blockStartX));
@@ -314,7 +283,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
                     Holder<Biome>[][] table = this.variantTable;
                     Holder<Biome>[] variants = table == null ? null : table[biomeId];
                     if (variants != null) {
-                        return variants[variantIndex(seed, blockX, blockZ, variants.length)];
+                        return variants[variantIndex(memo.seed, blockX, blockZ, variants.length)];
                     }
                     return entry;
                 }

@@ -37,23 +37,34 @@ public final class SyntheticMapFactory {
     // Per-seed noise instances (channels 0..4)
     private final FastNoiseLite[] noises = new FastNoiseLite[N_CHANNELS];
 
-    private static float[][] cachedDataQuantiles;
-    private static float cachedATempStd;
-    private static float cachedBTempStd;
-    private static float cachedTempStdP1;
-    private static float cachedTempStdP99;
-    private static boolean dataLoaded = false;
+    /** Seed-independent data from pipeline_data.json, loaded once and shared by all instances.
+     *  Published only through the synchronized {@link #loadDataIfNeeded()} so constructors on
+     *  any thread see fully initialized values. */
+    private static final class PipelineData {
+        final float[][] dataQuantiles;
+        final float aTempStd, bTempStd, tempStdP1, tempStdP99;
+
+        PipelineData(float[][] dataQuantiles, float aTempStd, float bTempStd, float tempStdP1, float tempStdP99) {
+            this.dataQuantiles = dataQuantiles;
+            this.aTempStd = aTempStd;
+            this.bTempStd = bTempStd;
+            this.tempStdP1 = tempStdP1;
+            this.tempStdP99 = tempStdP99;
+        }
+    }
+
+    private static PipelineData pipelineData;
 
     /**
      * @param worldSeed 64-bit world seed (Python: {@code seed & 0xFFFFFFFFFFFFFFFF}). Per-channel seeds use lower 32 bits.
      */
     public SyntheticMapFactory(long worldSeed) {
-        loadDataIfNeeded();
-        this.dataQuantiles = cachedDataQuantiles;
-        this.aTempStd = cachedATempStd;
-        this.bTempStd = cachedBTempStd;
-        this.tempStdP1 = cachedTempStdP1;
-        this.tempStdP99 = cachedTempStdP99;
+        PipelineData data = loadDataIfNeeded();
+        this.dataQuantiles = data.dataQuantiles;
+        this.aTempStd = data.aTempStd;
+        this.bTempStd = data.bTempStd;
+        this.tempStdP1 = data.tempStdP1;
+        this.tempStdP99 = data.tempStdP99;
 
         this.noiseQuantiles = new float[N_CHANNELS][];
         for (int ch = 0; ch < N_CHANNELS; ch++) {
@@ -69,27 +80,29 @@ public final class SyntheticMapFactory {
         }
     }
 
-    private static synchronized void loadDataIfNeeded() {
-        if (dataLoaded) return;
+    private static synchronized PipelineData loadDataIfNeeded() {
+        if (pipelineData != null) return pipelineData;
         try {
             ModelAssetManager.ensureAssetsReady();
             Path pipelineDataPath = ModelAssetManager.resolveAssetPath("pipeline_data.json");
             try (Reader reader = Files.newBufferedReader(pipelineDataPath, StandardCharsets.UTF_8)) {
-            JsonObject data = new Gson().fromJson(reader, JsonObject.class);
-            int nQ = data.get("n_quantiles").getAsInt();
-            JsonArray dataArr = data.getAsJsonArray("data_quantile_tables");
-            cachedDataQuantiles = new float[N_CHANNELS][nQ];
-            for (int ch = 0; ch < N_CHANNELS; ch++) {
-                JsonArray dq = dataArr.get(ch).getAsJsonArray();
-                for (int i = 0; i < nQ; i++) {
-                    cachedDataQuantiles[ch][i] = dq.get(i).getAsFloat();
+                JsonObject data = new Gson().fromJson(reader, JsonObject.class);
+                int nQ = data.get("n_quantiles").getAsInt();
+                JsonArray dataArr = data.getAsJsonArray("data_quantile_tables");
+                float[][] dataQuantiles = new float[N_CHANNELS][nQ];
+                for (int ch = 0; ch < N_CHANNELS; ch++) {
+                    JsonArray dq = dataArr.get(ch).getAsJsonArray();
+                    for (int i = 0; i < nQ; i++) {
+                        dataQuantiles[ch][i] = dq.get(i).getAsFloat();
+                    }
                 }
-            }
-            cachedATempStd = data.get("a_temp_std").getAsFloat();
-            cachedBTempStd = data.get("b_temp_std").getAsFloat();
-            cachedTempStdP1 = data.get("temp_std_p1").getAsFloat();
-            cachedTempStdP99 = data.get("temp_std_p99").getAsFloat();
-            dataLoaded = true;
+                pipelineData = new PipelineData(
+                        dataQuantiles,
+                        data.get("a_temp_std").getAsFloat(),
+                        data.get("b_temp_std").getAsFloat(),
+                        data.get("temp_std_p1").getAsFloat(),
+                        data.get("temp_std_p99").getAsFloat());
+                return pipelineData;
             }
         } catch (Exception e) {
             throw new RuntimeException("Failed to load pipeline_data.json", e);

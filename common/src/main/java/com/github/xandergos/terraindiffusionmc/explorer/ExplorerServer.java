@@ -46,6 +46,7 @@ public final class ExplorerServer {
     private static final float NATIVE_RESOLUTION = WorldPipelineModelConfig.nativeResolution();
 
     private static volatile HttpServer SERVER;
+    private static volatile java.util.concurrent.ExecutorService SERVER_EXECUTOR;
     private static volatile int SERVER_PORT = -1;
 
     private ExplorerServer() {}
@@ -72,13 +73,15 @@ public final class ExplorerServer {
         server.createContext("/api/detail.png", ExplorerServer::handleDetailPng);
         server.createContext("/api/detail_raw", ExplorerServer::handleDetailRaw);
         // Single-thread executor matches Python's threaded=False
-        server.setExecutor(Executors.newSingleThreadExecutor(r -> {
+        java.util.concurrent.ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "terrain-explorer-http");
             t.setDaemon(true);
             return t;
-        }));
+        });
+        server.setExecutor(executor);
         server.start();
         SERVER = server;
+        SERVER_EXECUTOR = executor;
         SERVER_PORT = port;
         LOG.info("Terrain explorer started at http://127.0.0.1:{}", port);
         return port;
@@ -89,6 +92,10 @@ public final class ExplorerServer {
             SERVER.stop(0);
             SERVER = null;
             SERVER_PORT = -1;
+            if (SERVER_EXECUTOR != null) {
+                SERVER_EXECUTOR.shutdownNow();
+                SERVER_EXECUTOR = null;
+            }
             LOG.info("Terrain explorer stopped.");
         }
     }

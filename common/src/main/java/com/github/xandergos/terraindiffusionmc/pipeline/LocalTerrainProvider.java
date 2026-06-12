@@ -1,6 +1,8 @@
 package com.github.xandergos.terraindiffusionmc.pipeline;
 
+import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.infinitetensor.FloatTensor;
+import com.github.xandergos.terraindiffusionmc.world.HeightConverter;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -76,7 +78,8 @@ public final class LocalTerrainProvider {
     });
 
     private static volatile LocalTerrainProvider INSTANCE;
-    private static long instanceSeed;
+    /** Volatile: read from chunk-worker threads, written on the init/inference threads. */
+    private static volatile long instanceSeed;
 
     private final WorldPipeline pipeline;
 
@@ -186,6 +189,80 @@ public final class LocalTerrainProvider {
 
     private static <T> T submitToInferenceThread(Callable<T> task) throws Exception {
         return INFERENCE_EXECUTOR.submit(task).get();
+    }
+
+    // =========================================================================
+    // Per-thread tile memo — the shared fast path for all worldgen callers
+    // =========================================================================
+
+    /**
+     * Per-thread memo of the last fetched tile plus the last column's converted height.
+     * The density function, carver mixin, and biome source each call once per block or
+     * quart cell, and nearly all calls land in the previous tile (and usually the previous
+     * column), so this skips the cache-key allocation and map lookup of fetchHeightmap.
+     * Re-keyed on seed and scale so it never outlives a cache clear from
+     * changeSeedFromExplorer or a scale change.
+     */
+    public static final class TileMemo {
+        public long seed;
+        private int scale = -1;
+        public int blockStartX, blockStartZ;
+        private int blockEndX, blockEndZ;
+        public HeightmapData data;
+        private int lastX = Integer.MIN_VALUE, lastZ = Integer.MIN_VALUE, lastHeight;
+    }
+
+    private static final ThreadLocal<TileMemo> TILE_MEMO = ThreadLocal.withInitial(TileMemo::new);
+
+    /**
+     * Returns this thread's memo positioned on the tile containing (blockX, blockZ),
+     * fetching the tile if needed (which may block on inference for an uncached tile).
+     * The returned object is thread-local and only valid until the next call.
+     */
+    public static TileMemo tileAt(int blockX, int blockZ) {
+        TileMemo memo = TILE_MEMO.get();
+        long seed = instanceSeed;
+        int scale = WorldScaleManager.getCurrentScale();
+        if (memo.data == null || memo.seed != seed || memo.scale != scale
+                || blockX < memo.blockStartX || blockX >= memo.blockEndX
+                || blockZ < memo.blockStartZ || blockZ >= memo.blockEndZ) {
+            int tileSize = TerrainDiffusionConfig.tileSize();
+            int tileShift = Integer.numberOfTrailingZeros(tileSize);
+            memo.blockStartX = (blockX >> tileShift) << tileShift;
+            memo.blockStartZ = (blockZ >> tileShift) << tileShift;
+            memo.blockEndX = memo.blockStartX + tileSize;
+            memo.blockEndZ = memo.blockStartZ + tileSize;
+            memo.seed = seed;
+            memo.scale = scale;
+            memo.lastX = Integer.MIN_VALUE;
+            memo.lastZ = Integer.MIN_VALUE;
+            memo.data = getInstance()
+                    .fetchHeightmap(memo.blockStartZ, memo.blockStartX, memo.blockEndZ, memo.blockEndX);
+        }
+        return memo;
+    }
+
+    /**
+     * Terrain surface height (Minecraft y) for a block column, or {@link Integer#MIN_VALUE}
+     * if heightmap data is unavailable. Memoizes the last column per thread, so repeated
+     * calls for the same (x, z) — e.g. a carver walking down a column — are two compares.
+     */
+    public static int surfaceHeight(int x, int z) {
+        TileMemo memo = tileAt(x, z);
+        HeightmapData data = memo.data;
+        if (data == null || data.heightmap == null) {
+            return Integer.MIN_VALUE;
+        }
+        if (x == memo.lastX && z == memo.lastZ) {
+            return memo.lastHeight;
+        }
+        int localX = Math.max(0, Math.min(data.width  - 1, x - memo.blockStartX));
+        int localZ = Math.max(0, Math.min(data.height - 1, z - memo.blockStartZ));
+        int height = HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]);
+        memo.lastX = x;
+        memo.lastZ = z;
+        memo.lastHeight = height;
+        return height;
     }
 
     /**

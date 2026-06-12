@@ -1,8 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
-import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
-import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
 import com.mojang.serialization.MapCodec;
 import net.minecraft.util.KeyDispatchDataCodec;
 import net.minecraft.world.level.levelgen.DensityFunction;
@@ -18,94 +16,16 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
 
     @Override
     public double compute(DensityFunction.FunctionContext pos) {
-        int targetHeight = terrainSurfaceHeight(pos.blockX(), pos.blockZ());
+        int targetHeight = LocalTerrainProvider.surfaceHeight(pos.blockX(), pos.blockZ());
         if (targetHeight == Integer.MIN_VALUE) {
             return 1.0;
         }
         return pos.blockY() < targetHeight ? 1.0 : -1.0;
     }
 
-    /**
-     * Terrain surface height for a column, or {@link Integer#MIN_VALUE} if
-     * heightmap data is unavailable.
-     */
-    public static int terrainSurfaceHeight(int x, int z) {
-        int tileSize = TerrainDiffusionConfig.tileSize();
-        int tileShift = Integer.numberOfTrailingZeros(tileSize);
-
-        int blockStartX = (x >> tileShift) << tileShift;
-        int blockStartZ = (z >> tileShift) << tileShift;
-
-        HeightmapData data = LocalTerrainProvider.getInstance()
-                .fetchHeightmap(blockStartZ, blockStartX, blockStartZ + tileSize, blockStartX + tileSize);
-
-        if (data == null || data.heightmap == null) {
-            return Integer.MIN_VALUE;
-        }
-
-        int localX = Math.max(0, Math.min(data.width - 1, x - blockStartX));
-        int localZ = Math.max(0, Math.min(data.height - 1, z - blockStartZ));
-
-        return HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]);
-    }
-
-    private static final class FillContext {
-        int blockStartX, blockStartZ, blockEndX, blockEndZ;
-        HeightmapData data;
-
-        void update(int x, int z) {
-            if (x < blockStartX || x >= blockEndX) this.init(x, z);
-            if (z < blockStartZ || z >= blockEndZ) this.init(x, z);
-        }
-
-        void init(int x, int z) {
-            int tileSize = TerrainDiffusionConfig.tileSize();
-            int tileShift = Integer.numberOfTrailingZeros(tileSize);
-
-            int tileX = x >> tileShift;
-            int tileZ = z >> tileShift;
-
-            this.blockStartX = tileX << tileShift;
-            this.blockStartZ = tileZ << tileShift;
-            this.blockEndX = blockStartX + tileSize;
-            this.blockEndZ = blockStartZ + tileSize;
-
-            this.data = LocalTerrainProvider.getInstance()
-                .fetchHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
-        }
-    }
-
     @Override
     public void fillArray(double[] densities, DensityFunction.ContextProvider applier) {
-        if (densities.length == 0) return;
-
-        FillContext ctx = new FillContext();
-        DensityFunction.FunctionContext pos = applier.forIndex(0);
-        int x = pos.blockX();
-        int z = pos.blockZ();
-        int y = pos.blockY();
-        ctx.init(x, z);
-
-        for (int i = 0; i < densities.length; i++) {
-            pos = applier.forIndex(i);
-            x = pos.blockX();
-            z = pos.blockZ();
-            y = pos.blockY();
-            ctx.update(x, z);
-
-            HeightmapData data = ctx.data;
-            if (data == null || data.heightmap == null) {
-                densities[i] = 1.0;
-                continue;
-            }
-
-            int localX = Math.max(0, Math.min(data.width  - 1, x - ctx.blockStartX));
-            int localZ = Math.max(0, Math.min(data.height - 1, z - ctx.blockStartZ));
-
-            int targetHeight = HeightConverter
-                .convertToMinecraftHeight(data.heightmap[localZ][localX]);
-            densities[i] = y < targetHeight ? 1.0 : -1.0;
-        }
+        applier.fillAllDirectly(densities, this);
     }
 
     @Override
