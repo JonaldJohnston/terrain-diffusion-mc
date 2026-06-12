@@ -334,6 +334,29 @@ subprojects { subproject ->
                 subproject.tasks.named('build') {
                     dependsOn subproject.tasks.named('jarJar')
                 }
+
+                // Other mods may embed the CPU onnxruntime via Jar-in-Jar (ATM10's Oracle
+                // Index does). JPMS refuses to resolve two modules exporting ai.onnxruntime.*,
+                // so publish every variant's runtime under the shared 'onnxruntime' identifier:
+                // the JarJar selector then keeps exactly one jar instead of loading both.
+                // OnnxModel falls back to CPU at runtime if the surviving jar lacks our
+                // CUDA/DirectML provider.
+                subproject.tasks.named('jarJar') { jarJarTask ->
+                    jarJarTask.doLast {
+                        File metadataFile = subproject.file('build/generated/jarJar/META-INF/jarjar/metadata.json')
+                        if (!metadataFile.exists()) {
+                            return
+                        }
+                        def metadata = new groovy.json.JsonSlurper().parse(metadataFile)
+                        metadata.jars.each { entry ->
+                            if (entry.identifier?.group == 'com.microsoft.onnxruntime') {
+                                entry.identifier.artifact = 'onnxruntime'
+                                entry.version.range = "[${entry.version.artifactVersion},)".toString()
+                            }
+                        }
+                        metadataFile.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(metadata))
+                    }
+                }
             }
         }
     }
