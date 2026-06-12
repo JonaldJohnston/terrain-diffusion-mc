@@ -7,7 +7,6 @@
     { "id": "terralith:volcanic_crater", "required": false },
     { "id": "terralith:volcanic_peaks", "required": false },
     { "id": "terralith:yosemite_cliffs", "required": false },
-    { "id": "biomeswevegone:crag_gardens", "required": false },
     { "id": "biomeswevegone:red_rock_peaks", "required": false }
   ]
 }

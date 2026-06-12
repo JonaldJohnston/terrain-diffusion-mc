@@ -7,7 +7,6 @@
     { "id": "biomeswevegone:canadian_shield", "required": false },
     { "id": "regions_unexplored:windswept_maple_forest", "required": false },
     { "id": "regions_unexplored:towering_cliffs", "required": false },
-    { "id": "regions_unexplored:mountains", "required": false },
-    { "id": "regions_unexplored:temperate_grove", "required": false }
+    { "id": "regions_unexplored:mountains", "required": false }
   ]
 }

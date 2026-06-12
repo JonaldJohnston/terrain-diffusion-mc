@@ -6,6 +6,7 @@
     { "id": "terralith:jungle_mountains", "required": false },
     { "id": "terralith:rocky_jungle", "required": false },
     { "id": "terralith:tropical_jungle", "required": false },
+    { "id": "biomeswevegone:crag_gardens", "required": false },
     { "id": "biomeswevegone:fragment_jungle", "required": false },
     { "id": "biomeswevegone:jacaranda_jungle", "required": false },
     { "id": "biomeswevegone:tropical_rainforest", "required": false },
