@@ -58,6 +58,19 @@ public final class TerrainDiffusionConfig {
         return readBoolean("validate_model", DEFAULT_VALIDATE_MODEL);
     }
 
+    /**
+     * Fraction of structures to keep in the Terrain Diffusion dimension, in [0, 1].
+     * Applied as an extra per-chunk probability gate on top of each structure set's own
+     * placement, so e.g. 0.4 keeps roughly 40% of the structures vanilla would have placed.
+     * Strongholds are exempt (they are underground and required for progression).
+     */
+    public static float structureDensity() {
+        float value = readFloat("structures.density", 0.4f);
+        if (value < 0.0f) return 0.0f;
+        if (value > 1.0f) return 1.0f;
+        return value;
+    }
+
     /** Initial coarse-pixel radius for spawn land search (NxN region centered at origin). */
     public static int spawnSearchInitialSize() {
         return readInt("spawn_search.initial_size", 16);
@@ -155,6 +168,17 @@ public final class TerrainDiffusionConfig {
             return Integer.parseInt(value);
         } catch (NumberFormatException e) {
             System.err.println("Invalid int for " + key + ": " + value + ", using default " + defaultValue);
+            return defaultValue;
+        }
+    }
+
+    private static float readFloat(String key, float defaultValue) {
+        String value = PROPERTIES.getProperty(key);
+        if (value == null) return defaultValue;
+        try {
+            return Float.parseFloat(value.trim());
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid float for " + key + ": " + value + ", using default " + defaultValue);
             return defaultValue;
         }
     }

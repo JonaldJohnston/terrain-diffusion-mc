@@ -6,7 +6,9 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": [
     "BiomeMixin",
+    "ChunkGeneratorStructureStateAccessor",
     "MinecraftServerMixin",
+    "StructurePlacementMixin",
     "SurfaceSystemMixin",
     "WorldCarverMixin"
   ],
